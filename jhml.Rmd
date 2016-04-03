@@ -1,0 +1,73 @@
+---
+title: "Johns Hopkins Practical Machine Learning"
+author: "Dr Mark Thomas"
+date: "1 April 2016"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache=TRUE)
+```
+```{r}
+library(caret)
+library(doMC)
+library(ipred)
+registerDoMC(cores=8) 
+
+training <- read.csv("~/Dropbox/JHML/pml-training.csv")
+testing <- read.csv("~/Dropbox/JHML/pml-testing.csv")
+```
+It is notable that some of the columns do not include useful information for prediction of classe. These columns were therefore removed as they will only add to noise and not signal. X was removed as it is simply the row number. The timestamp is removed as it replicates information that is contained within the raw times.
+
+It is also notable that several of the variables contain mostly missing values. It is not known why these values are missing and they were therefore removed as this could introduce bias. All variables that are > 97% NA are removed.
+```{r}
+redundantVar <- c("X","cvtd_timestamp")
+training <- training[,!names(training)%in%redundantVar]
+training <- training[,-nearZeroVar(training)]
+training <- training[,sapply(training, function(x) mean(is.na(x))<0.97)]
+```
+Some of the numeric variables have been co-erced to factors because they contain text. These variables were convted back into numeric variables.
+```{r}
+factorVar <- names(training)[sapply(training, is.factor)]
+factorVar <- factorVar[!factorVar%in%c("classe","user_name","new_window")]
+training[,factorVar] <- sapply(training[,factorVar], function(x) as.numeric(as.character(x)))
+```
+The dataset is then split into 5 different folds for 5-fold cross validation. A for loop then builds a model on 4/5ths of the data and tests it on the remaining 1/5 of the data. The error is calculated and this is then meaned to estimate the out of sample error.
+
+Missing values were imputed using "bagImpute", which uses bagged trees. This approach is accurate, at the expense of computational time. The randomforest algorithm was used to predict classe, because it offers state of the art accuracy and requires minimal tuning.
+```{r}
+set.seed(100)
+cvfolds <- 5
+errors <- NULL
+training <- training[sample(nrow(training)),]
+folds <- cut(seq(1,nrow(training)), breaks=cvfolds, labels=FALSE)
+for (i in 1:cvfolds){
+  #splits the data set into training and test set
+  testIndex <- which(folds==i, arr.ind=TRUE)
+  cvtesting <- training[testIndex,]
+  cvtraining <- training[-testIndex,]
+  
+  #imputes missing values and creates a random forest model
+  preProc <- preProcess(method=c("bagImpute"), cvtraining)
+  cvtraining <- predict(preProc, cvtraining)
+  rfFit <- train(classe~., data=cvtraining, method="rf", ntree=100)
+  acc <- mean(cvtesting$classe[!is.na(cvtesting$classe)]==predict(rfFit, 
+                                        cvtesting[!is.na(cvtesting$classe),]))
+  errors <- c(errors, acc)
+}
+```
+The mean accuracy is then average across folds of cross validation
+```{r}
+meanacc <- mean(errors)
+meanacc
+```
+The entire training set is then used to build a model for predicting classe of the test set. The predictions matched 100% with the true values on the Coursera final quiz.
+```{r}
+preProc <- preProcess(method=c("bagImpute"), training)
+training <- predict(preProc, training)
+rfFit <- train(classe~., data=training, method="rf", ntree=100)
+rfFit
+prediction <- predict(rfFit, testing)
+prediction
+```
+#Executive summary
+This project fitted a randomforest model to personal activity data. The dataset was then able to accurately predict (out of sample accuracy of over 99%) whether the exercises were being performed correctly (classe of the dataset). This provided 100% accuracy on the provided test set when tested against the Coursera answers.
